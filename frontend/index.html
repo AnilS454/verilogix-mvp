@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VeriLogIX — MVP Dashboard</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#2563eb; --text:#e2e8f0; --muted:#94a3b8;
+          --green:#16a34a; --red:#dc2626; --amber:#d97706; --border:#334155; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { background:linear-gradient(90deg,#0f172a,#1e3a8a); padding:24px 32px; border-bottom:3px solid var(--accent); }
+  h1 { margin:0; font-size:1.6rem; }
+  .sub { color:var(--muted); font-size:.9rem; margin-top:4px; }
+  main { padding:24px 32px; max-width:1400px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin-bottom:24px; }
+  .stat { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px; }
+  .stat .label { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.05em; }
+  .stat .value { font-size:1.8rem; font-weight:700; margin-top:6px; }
+  .stat.pass .value { color:var(--green); }
+  .stat.fail .value { color:var(--red); }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:16px; }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border); cursor:pointer; }
+  .row:hover { background:rgba(37,99,235,.08); }
+  .row:last-child { border-bottom:none; }
+  .tag { padding:2px 8px; border-radius:4px; font-size:.72rem; font-weight:600; }
+  .tag.rtl{background:#7f1d1d;color:#fecaca} .tag.tb{background:#1e3a8a;color:#bfdbfe}
+  .tag.env{background:#78350f;color:#fde68a} .tag.timing{background:#4c1d95;color:#ddd6fe}
+  .tag.unknown{background:#334155;color:#cbd5e1}
+  pre { background:#020617; padding:14px; border-radius:6px; overflow-x:auto; font-size:.8rem; color:#f1f5f9; max-height:340px; }
+  .empty { color:var(--muted); text-align:center; padding:40px; }
+  .detail { display:none; } .detail.open { display:block; }
+  .btn { background:var(--accent); color:white; border:none; padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600; }
+  .btn:hover { background:#1d4ed8; }
+  .meta { color:var(--muted); font-size:.85rem; }
+  .analysis { background:#0c1a2e; border-left:3px solid var(--accent); padding:12px 14px; border-radius:0 6px 6px 0; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ VeriLogIX</h1>
+  <div class="sub">Semiconductor Verification Log Analyzer — MVP</div>
+</header>
+<main>
+  <div style="display:flex;justify-content:space-between;margin-bottom:16px;">
+    <div class="meta" id="status">Loading regressions…</div>
+    <button class="btn" onclick="load()">↻ Refresh</button>
+  </div>
+  <div class="grid" id="stats"></div>
+  <div class="card">
+    <h3 style="margin-top:0">Regressions</h3>
+    <div id="list" class="empty">No regressions yet. Upload a log via CLI.</div>
+  </div>
+</main>
+
+<script>
+const API = localStorage.getItem('verilogix_api') || 'http://localhost:8000';
+
+async function load() {
+  try {
+    const r = await fetch(`${API}/api/v1/regressions`);
+    const data = await r.json();
+    render(data);
+    document.getElementById('status').textContent = `Backend: ${API} · ${data.length} regression(s)`;
+  } catch (e) {
+    document.getElementById('status').textContent = `⚠ Cannot reach backend at ${API}`;
+    document.getElementById('stats').innerHTML = '';
+  }
+}
+
+function render(list) {
+  const totalErrors = list.reduce((s, r) => s + (r.error_count || 0), 0);
+  const totalLines = list.reduce((s, r) => s + (r.total_lines || 0), 0);
+  const fatals = list.filter(r => r.fatal_detected).length;
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="label">Regressions</div><div class="value">${list.length}</div></div>
+    <div class="stat fail"><div class="label">Errors Detected</div><div class="value">${totalErrors}</div></div>
+    <div class="stat"><div class="label">Log Lines Parsed</div><div class="value">${totalLines.toLocaleString()}</div></div>
+    <div class="stat fail"><div class="label">Fatal Builds</div><div class="value">${fatals}</div></div>
+  `;
+
+  const el = document.getElementById('list');
+  if (!list.length) { el.className = 'empty'; el.textContent = 'No regressions yet. Upload a log via CLI.'; return; }
+  el.className = '';
+  el.innerHTML = list.map(r => `
+    <div>
+      <div class="row" onclick="toggle('${r.regression_id}')">
+        <div>
+          <strong>${escapeHtml(r.project_name)}</strong>
+          <span class="meta"> · ${r.branch || 'no-branch'} · ${r.simulator} · ${new Date(r.created_at).toLocaleString()}</span>
+          <div class="meta">${r.total_lines.toLocaleString()} lines · ${r.error_count} errors · ${r.unique_signatures} unique</div>
+        </div>
+        <div>
+          ${r.fatal_detected ? '<span class="tag rtl">FATAL</span>' : '<span class="tag unknown">OK</span>'}
+        </div>
+      </div>
+      <div id="d-${r.regression_id}" class="detail"></div>
+    </div>
+  `).join('');
+}
+
+async function toggle(id) {
+  const el = document.getElementById(`d-${id}`);
+  if (el.classList.contains('open')) { el.classList.remove('open'); el.innerHTML = ''; return; }
+  el.classList.add('open'); el.innerHTML = '<div class="meta">Loading…</div>';
+  const r = await fetch(`${API}/api/v1/regressions/${id}`);
+  const data = await r.json();
+  el.innerHTML = renderDetails(data);
+}
+
+function renderDetails(data) {
+  if (!data.errors.length) return '<div class="empty">No errors in this regression 🎉</div>';
+  return data.errors.map((e, i) => `
+    <div class="card" style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:12px">
+        <div>
+          <strong>${escapeHtml(e.error_id)}</strong>
+          <span class="meta"> in ${escapeHtml(e.scope)} @ ${escapeHtml(e.timestamp)}</span>
+          <div style="margin-top:6px">${escapeHtml(e.message)}</div>
+          ${e.source_file ? `<div class="meta" style="margin-top:4px">📍 ${escapeHtml(e.source_file)}:${e.line_number}</div>` : ''}
+        </div>
+        <span class="tag ${catClass(e.analysis.failure_category)}">${e.analysis.failure_category}</span>
+      </div>
+      <div class="analysis">
+        <div style="font-weight:600;color:#93c5fd">🤖 AI Summary</div>
+        <div style="margin:4px 0">${escapeHtml(e.analysis.summary)}</div>
+        <div style="font-weight:600;color:#86efac;margin-top:8px">🔧 Recommended Fix</div>
+        <div>${escapeHtml(e.analysis.recommended_fix)}</div>
+        <div class="meta" style="margin-top:6px">Confidence: ${(e.analysis.confidence_score*100).toFixed(0)}% · sig ${e.signature_hash}${e.analysis.cached ? ' · cached' : ''}</div>
+      </div>
+      <details style="margin-top:10px"><summary class="meta">▸ Show raw context</summary>
+        <pre>${escapeHtml(e.context_snippet)}</pre>
+      </details>
+    </div>
+  `).join('');
+}
+
+function catClass(c) {
+  return ({RTL_BUG:'rtl',TESTBENCH_BUG:'tb',ENV_CONFIG:'env',TIMING_VIOLATION:'timing'})[c] || 'unknown';
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
